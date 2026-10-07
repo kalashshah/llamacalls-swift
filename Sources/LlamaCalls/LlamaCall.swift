@@ -142,6 +142,9 @@ public final class LlamaCall {
         let peer = try media.makePeerConnection(iceServers: iceServers, events: self)
         self.peer = peer
         negotiator = Negotiator(peer: peer, send: { [weak self] in self?.send($0) }, answerTimeout: answerTimeout)
+        // The room offers the agent's voice and face only to a caller with a session; asking now
+        // means they arrive even while the app holds its own media back.
+        send(.subscribe)
         pinger = Task { [weak self, pingInterval] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: pingInterval)
@@ -252,7 +255,9 @@ public final class LlamaCall {
         negotiator = nil
         camera?.stop()
         camera = nil
+        microphone?.detach()
         microphone = nil
+        for track in agentAudio { track.detach() }
         peer?.close()
         peer = nil
         socket?.onClose = nil
@@ -288,7 +293,8 @@ public final class LlamaCall {
             agentState = AgentState(rawValue: value)
         case let .agent(present):
             agentPresent = present
-            if !present { agentState = nil }
+            // The room reports a state only once the agent first changes one; until then it is listening.
+            agentState = present ? (agentState ?? .listening) : nil
         case let .screen(live):
             screenLive = live
             if !live { screen = nil }

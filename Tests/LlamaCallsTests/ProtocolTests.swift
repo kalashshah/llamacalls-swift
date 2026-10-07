@@ -32,6 +32,7 @@ final class ProtocolTests: XCTestCase {
         }
         XCTAssertEqual(try object(.ping), ["t": "ping"])
         XCTAssertEqual(try object(.hangup), ["t": "hangup"])
+        XCTAssertEqual(try object(.subscribe), ["t": "subscribe"])
         XCTAssertEqual(try object(.camera(on: false)), ["t": "camera", "on": false])
         XCTAssertEqual(try object(.answer(SessionDescription(type: "answer", sdp: "A"))), ["t": "answer", "answer": ["type": "answer", "sdp": "A"]])
         XCTAssertEqual(

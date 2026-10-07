@@ -85,7 +85,8 @@ import Foundation
                     if self?.waiting === waiter { self?.waiting = nil }
                 }
                 defer { timeout.cancel() }
-                let offer = try await peer.createOffer()
+                let raw = try await peer.createOffer()
+                let offer = SessionDescription(type: raw.type, sdp: Extmap.align(raw.sdp, toRemote: peer.remoteSDP))
                 try await peer.setLocalDescription(offer)
                 // The room drops a publish that crossed its offer, so one already crossed is not sent.
                 if !waiter.isResolved {

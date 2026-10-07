@@ -35,6 +35,40 @@ import XCTest
         XCTAssertEqual(WebRTCRemoteAudio(track).volume, 1)
     }
 
+    /// Closing detaches the delegate first: WebRTC's signaling thread can still be delivering a
+    /// callback while the peer is freed, and a weak delegate is not cleared until after its ivars go.
+    func testCloseDetachesTheDelegateBeforeTheCallbacksCanReachAFreedPeer() throws {
+        let peer = try WebRTCPeer(iceServers: [], events: Events())
+        peer.close()
+        XCTAssertNil(peer.connectionDelegate)
+    }
+
+    /// WebRTC can still reach a tap after we remove it (removal happens on its own thread), so a tap
+    /// must live as long as the track it was added to, not as long as our wrapper.
+    func testATapOutlivesItsWrapperWhileTheTrackLives() {
+        let factory = WebRTCMedia.factory
+        let track = factory.audioTrack(with: factory.audioSource(with: LKRTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)), trackId: "probe")
+        weak var tap: PCMRenderer?
+        do {
+            let audio = WebRTCRemoteAudio(track)
+            audio.tap { _ in }
+            tap = audio.lastTap
+            audio.detach()
+        }
+        XCTAssertNotNil(tap, "the tap was freed while WebRTC may still call it")
+        withExtendedLifetime(track) {}
+    }
+
+    /// A peer dropped without close() (an app releasing a live call) must close itself, delegate first,
+    /// or WebRTC's signaling thread calls into it while it is being freed.
+    func testAPeerDroppedWithoutCloseClosesItself() throws {
+        var peer: WebRTCPeer? = try WebRTCPeer(iceServers: [], events: Events())
+        let raw = try XCTUnwrap(peer?.raw)
+        peer = nil
+        XCTAssertEqual(raw.connectionState, .closed)
+        XCTAssertNil(raw.delegate)
+    }
+
     private final class Events: PeerConnectionEvents {
         func peerConnection(received media: RemoteMedia, mid: String) {}
         func peerConnectionFailed() {}

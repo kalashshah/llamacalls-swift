@@ -81,4 +81,17 @@ import XCTest
             XCTAssertEqual(error as? LlamaCallError, .notConnected)
         }
     }
+
+    func testPublishAlignsItsOfferWithTheRoomsHeaderExtensions() async throws {
+        peer.remoteSDP = "m=audio 1 RTP/SAVPF 111\r\na=extmap:1 urn:transport-cc\r\n"
+        peer.offerSDP = "m=audio 9 RTP/SAVPF 111\r\na=extmap:1 urn:audio-level\r\n"
+        let publishing = Task { try await negotiator.publish(FakeTrack(), as: "mic") }
+        await settle()
+        guard case let .publish(offer, _) = sent.first else { return XCTFail("nothing published") }
+        XCTAssertEqual(offer.sdp, "m=audio 9 RTP/SAVPF 111\r\na=extmap:2 urn:audio-level\r\n")
+        XCTAssertTrue(peer.log.contains("local:offer"))
+        XCTAssertEqual(peer.lastLocalSDP, offer.sdp)
+        negotiator.receiveAnswer(SessionDescription(type: "answer", sdp: "A"))
+        try await publishing.value
+    }
 }

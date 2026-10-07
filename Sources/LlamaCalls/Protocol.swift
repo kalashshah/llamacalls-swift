@@ -98,6 +98,8 @@ enum ClientMessage: Equatable, Sendable {
     case answer(SessionDescription)
     case camera(on: Bool)
     case hangup
+    /// Receive the agent's tracks before publishing anything.
+    case subscribe
     case ping
 
     func encoded() -> String {
@@ -107,6 +109,7 @@ enum ClientMessage: Equatable, Sendable {
         case let .answer(answer): body = Out(t: "answer", answer: answer)
         case let .camera(on): body = Out(t: "camera", on: on)
         case .hangup: body = Out(t: "hangup")
+        case .subscribe: body = Out(t: "subscribe")
         case .ping: body = Out(t: "ping")
         }
         return (try? JSONEncoder().encode(body)).map { String(decoding: $0, as: UTF8.self) } ?? #"{"t":"ping"}"#

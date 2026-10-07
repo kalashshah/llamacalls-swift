@@ -56,10 +56,17 @@ import UIKit
 final class WebRTCLocalTrack: LocalMediaTrack {
     let track: LKRTCMediaStreamTrack
     // The track holds its renderer weakly in some builds; this keeps it alive with the track.
-    private let renderer: AnyObject?
-    init(_ track: LKRTCMediaStreamTrack, keeping renderer: AnyObject? = nil) {
+    private let renderer: PCMRenderer?
+    init(_ track: LKRTCMediaStreamTrack, keeping renderer: PCMRenderer? = nil) {
         self.track = track
         self.renderer = renderer
+    }
+    func detach() {
+        if let renderer, let audio = track as? LKRTCAudioTrack {
+            audio.remove(renderer)
+            PCMRenderer.retire([renderer])
+        }
+        track.isEnabled = false
     }
     var isEnabled: Bool {
         get { track.isEnabled }
@@ -81,12 +88,28 @@ final class WebRTCRemoteAudio: RemoteAudioTrack {
         renderers.append(renderer)
         track.add(renderer)
     }
+    func detach() {
+        let gone = renderers
+        renderers = []
+        for renderer in gone { track.remove(renderer) }
+        PCMRenderer.retire(gone)
+    }
+    /// The newest tap, for tests.
+    var lastTap: PCMRenderer? { renderers.last }
 }
 
 final class PCMRenderer: NSObject, LKRTCAudioRenderer {
     private let handler: @Sendable (AVAudioPCMBuffer) -> Void
     init(_ handler: @escaping @Sendable (AVAudioPCMBuffer) -> Void) { self.handler = handler }
     func render(pcmBuffer: AVAudioPCMBuffer) { handler(pcmBuffer) }
+
+    /// WebRTC removes a renderer on its own thread and can still reach it while the peer connection
+    /// tears down, so a removed renderer is held a while rather than freed under it.
+    // ponytail: a fixed grace period, not a completion signal; WebRTC exposes none for removal.
+    static func retire(_ renderers: [PCMRenderer]) {
+        guard !renderers.isEmpty else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10) { withExtendedLifetime(renderers) {} }
+    }
 }
 
 final class WebRTCTransceiver: Transceiver {
@@ -112,6 +135,8 @@ final class WebRTCTransceiver: Transceiver {
         }
         self.pc = pc
     }
+
+    var remoteSDP: String? { pc.remoteDescription?.sdp }
 
     func addTransceiver(sending track: LocalMediaTrack) throws -> Transceiver {
         guard let local = track as? WebRTCLocalTrack else { throw LlamaCallError.notConnected }
@@ -143,7 +168,24 @@ final class WebRTCTransceiver: Transceiver {
         try await pc.setLocalDescription(LKRTCSessionDescription(type: .rollback, sdp: ""))
     }
 
-    func close() { pc.close() }
+    /// The peer connection's delegate, for tests: nil once closed.
+    var connectionDelegate: LKRTCPeerConnectionDelegate? { pc.delegate }
+    /// The WebRTC object, for tests.
+    var raw: LKRTCPeerConnection { pc }
+
+    // A call released without hangUp()/leave() lands here with the connection still open; WebRTC
+    // would otherwise finish it on its own thread against a delegate that is being freed.
+    deinit {
+        pc?.delegate = nil
+        pc?.close()
+    }
+
+    func close() {
+        // Detached first: the signaling thread can still be delivering a callback while this object
+        // is freed, and a weak delegate is only cleared after the peer connection ivar is destroyed.
+        pc.delegate = nil
+        pc.close()
+    }
 
     private static func wire(_ d: LKRTCSessionDescription) -> SessionDescription {
         SessionDescription(type: LKRTCSessionDescription.string(for: d.type), sdp: d.sdp)

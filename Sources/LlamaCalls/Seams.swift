@@ -18,11 +18,14 @@ public final class VideoTrack: Equatable, @unchecked Sendable {
 
 protocol LocalMediaTrack: AnyObject {
     var isEnabled: Bool { get set }
+    /// Taken off WebRTC before release, so the audio thread cannot call into a freed tap.
+    func detach()
 }
 
 protocol RemoteAudioTrack: AnyObject {
     var volume: Double { get set }
     func tap(_ handler: @escaping @Sendable (AVAudioPCMBuffer) -> Void)
+    func detach()
 }
 
 enum RemoteMedia {
@@ -40,6 +43,8 @@ protocol Transceiver: AnyObject {
 }
 
 @MainActor protocol PeerConnection: AnyObject {
+    /// The room's last description, for numbering our offers to agree with it.
+    var remoteSDP: String? { get }
     func addTransceiver(sending track: LocalMediaTrack) throws -> Transceiver
     func createOffer() async throws -> SessionDescription
     func createAnswer() async throws -> SessionDescription

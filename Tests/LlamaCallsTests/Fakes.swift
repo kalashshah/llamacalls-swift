@@ -2,20 +2,29 @@ import AVFoundation
 import Foundation
 @testable import LlamaCalls
 
-final class FakeTrack: LocalMediaTrack { var isEnabled = true }
+final class FakeTrack: LocalMediaTrack {
+    var isEnabled = true
+    var detached = false
+    func detach() { detached = true }
+}
 
 final class FakeTransceiver: Transceiver { var mid: String? }
 
 final class FakeRemoteAudio: RemoteAudioTrack {
     var volume: Double = 1
     var taps = 0
+    var detached = false
     func tap(_ handler: @escaping @Sendable (AVAudioPCMBuffer) -> Void) { taps += 1 }
+    func detach() { detached = true }
 }
 
 @MainActor final class FakePeer: PeerConnection {
     var log: [String] = []
     var nextMid = 0
     var closed = false
+    var remoteSDP: String?
+    var offerSDP = "LOCAL-OFFER"
+    var lastLocalSDP: String?
     /// Runs inside createOffer, before it returns: lets a test land a room message mid-offer.
     var duringCreateOffer: (() -> Void)?
 
@@ -30,13 +39,16 @@ final class FakeRemoteAudio: RemoteAudioTrack {
         log.append("createOffer")
         duringCreateOffer?()
         duringCreateOffer = nil
-        return SessionDescription(type: "offer", sdp: "LOCAL-OFFER")
+        return SessionDescription(type: "offer", sdp: offerSDP)
     }
     func createAnswer() async throws -> SessionDescription {
         log.append("createAnswer")
         return SessionDescription(type: "answer", sdp: "LOCAL-ANSWER")
     }
-    func setLocalDescription(_ d: SessionDescription) async throws { log.append("local:\(d.type)") }
+    func setLocalDescription(_ d: SessionDescription) async throws {
+        log.append("local:\(d.type)")
+        lastLocalSDP = d.sdp
+    }
     func setRemoteDescription(_ d: SessionDescription) async throws { log.append("remote:\(d.type):\(d.sdp)") }
     func rollback() async throws { log.append("rollback") }
     func close() { closed = true }

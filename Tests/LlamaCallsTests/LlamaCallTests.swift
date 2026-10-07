@@ -247,4 +247,18 @@ import XCTest
         XCTAssertEqual(media.madeCamera?.running, false)
         XCTAssertFalse(call.isCameraOn)
     }
+
+    func testSubscribesOnWelcomeSoTheAgentArrivesBeforeAnythingIsPublished() async throws {
+        let socket = try await connected()
+        XCTAssertEqual(socket.sentTypes.first, "subscribe")
+    }
+
+    func testAPresentAgentWithNoStateYetIsListening() async throws {
+        let socket = try await connected()
+        socket.server(#"{"t":"agent","present":true}"#)
+        XCTAssertEqual(call.agentState, .listening)
+        socket.server(#"{"t":"state","state":"speaking"}"#)
+        socket.server(#"{"t":"agent","present":true}"#)
+        XCTAssertEqual(call.agentState, .speaking)
+    }
 }
