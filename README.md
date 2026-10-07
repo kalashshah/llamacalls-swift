@@ -52,6 +52,8 @@ struct CallScreen: View {
             try? await call.connect(room: room, url: url, token: token)
             try? await call.setMicrophone(true)
         }
+        // A call is not torn down when the view goes away; leave it, or it keeps the mic open.
+        .onDisappear { Task { await call.leave() } }
     }
 }
 ```

@@ -203,4 +203,48 @@ import XCTest
         XCTAssertEqual(parts?.token, "T.K")
         XCTAssertNil(LlamaCall.parse(joinUrl: URL(string: "https://llamacalls.com/embed/api-9")!))
     }
+
+    func testEndedBeforeWelcomeThrowsInsteadOfHanging() async {
+        let connecting = Task { try await call.connect(room: "r", url: URL(string: "https://rt.example")!, token: "T") }
+        await settle()
+        media.socket!.server(#"{"t":"ended","reason":"room closed"}"#)
+        media.socket!.serverClose()
+        do { try await connecting.value; XCTFail("expected a throw") } catch {
+            XCTAssertEqual(error as? LlamaCallError, .refused)
+        }
+    }
+
+    func testHangUpWhileConnectingThrowsNotConnected() async {
+        let connecting = Task { try await call.connect(room: "r", url: URL(string: "https://rt.example")!, token: "T") }
+        await settle()
+        await call.hangUp()
+        do { try await connecting.value; XCTFail("expected a throw") } catch {
+            XCTAssertEqual(error as? LlamaCallError, .notConnected)
+        }
+        XCTAssertEqual(call.state, .ended(reason: "hung up"))
+    }
+
+    func testAFailedMicPublishCanBeRetried() async throws {
+        let socket = try await connected()
+        do { try await call.setMicrophone(true); XCTFail("expected a timeout") } catch {}
+        XCTAssertFalse(call.isMicrophoneOn)
+        let retry = Task { try await call.setMicrophone(true) }
+        await settle()
+        socket.server(#"{"t":"answer","answer":{"type":"answer","sdp":"A"}}"#)
+        try await retry.value
+        XCTAssertTrue(call.isMicrophoneOn)
+        XCTAssertEqual(socket.sentTypes.filter { $0 == "publish" }.count, 2)
+    }
+
+    func testCameraStartingAfterTheCallEndedIsStoppedAgain() async throws {
+        _ = try await connected()
+        media.slowCamera = true
+        let starting = Task { try await call.setCamera(true, publish: false) }
+        await settle()
+        await call.leave()
+        media.madeCamera?.finishStart()
+        _ = try? await starting.value
+        XCTAssertEqual(media.madeCamera?.running, false)
+        XCTAssertFalse(call.isCameraOn)
+    }
 }

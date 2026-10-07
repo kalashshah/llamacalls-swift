@@ -26,6 +26,15 @@ import XCTest
         peer.close()
     }
 
+    /// A fresh source reads 1.0, WebRTC's unity gain, so full agent volume must map to 1.0, not amplify it.
+    /// (Setting the volume only takes effect on remote sources, which this test cannot make.)
+    func testAgentVolumeOneIsUnityGain() {
+        let factory = WebRTCMedia.factory
+        let track = factory.audioTrack(with: factory.audioSource(with: LKRTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)), trackId: "probe")
+        XCTAssertEqual(track.source.volume, 1)
+        XCTAssertEqual(WebRTCRemoteAudio(track).volume, 1)
+    }
+
     private final class Events: PeerConnectionEvents {
         func peerConnection(received media: RemoteMedia, mid: String) {}
         func peerConnectionFailed() {}

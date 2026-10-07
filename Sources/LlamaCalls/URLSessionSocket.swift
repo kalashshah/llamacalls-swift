@@ -29,9 +29,10 @@ import Foundation
     func send(_ text: String) {
         guard let task, !closed else { return }
         pendingSends += 1
-        task.send(.string(text)) { [weak self] _ in
+        // Strong on purpose: the call drops its reference right after close(), and the drain
+        // below is what still has to run. The cycle ends when shutdown() does.
+        task.send(.string(text)) { _ in
             Task { @MainActor in
-                guard let self else { return }
                 self.pendingSends -= 1
                 if self.closeWhenDrained && self.pendingSends == 0 { self.shutdown() }
             }

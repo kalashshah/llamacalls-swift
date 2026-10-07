@@ -73,6 +73,8 @@ public final class LlamaCall {
     @ObservationIgnored private var agentAudio: [RemoteAudioTrack] = []
     @ObservationIgnored private var screenLive = false
     @ObservationIgnored private var decodingScreen = false
+    /// The pending `connect`, until welcome or failure. Kept so an end that lands first can fail it.
+    @ObservationIgnored private var connecting: CheckedContinuation<Void, Error>?
 
     init(media: Media, audioSession: AudioSessionControl, configuresAudioSession: Bool,
          pingInterval: Duration = .seconds(30), answerTimeout: Duration = .seconds(15), now: @escaping () -> Date = Date.init) {
@@ -101,17 +103,17 @@ public final class LlamaCall {
         self.socket = socket
         do {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                var settled = false
+                connecting = continuation
                 socket.onText = { [weak self] text in
                     guard let self, let message = ServerMessage.decode(text) else { return }
-                    if !settled, case let .welcome(iceServers) = message {
-                        settled = true
+                    if let pending = self.connecting, case let .welcome(iceServers) = message {
+                        self.connecting = nil
                         // Built here, not after the await, so a message in the same burst finds it.
                         do {
                             try self.open(iceServers: iceServers)
-                            continuation.resume()
+                            pending.resume()
                         } catch {
-                            continuation.resume(throwing: error)
+                            pending.resume(throwing: error)
                         }
                         return
                     }
@@ -119,11 +121,12 @@ public final class LlamaCall {
                 }
                 socket.onData = { [weak self] data in self?.receiveScreenFrame(data) }
                 socket.onClose = { [weak self] opened in
-                    if !settled {
-                        settled = true
-                        continuation.resume(throwing: opened ? LlamaCallError.refused : LlamaCallError.unreachable)
+                    guard let self else { return }
+                    if let pending = self.connecting {
+                        self.connecting = nil
+                        pending.resume(throwing: opened ? LlamaCallError.refused : LlamaCallError.unreachable)
                     } else {
-                        self?.end("disconnected")
+                        self.end("disconnected")
                     }
                 }
             }
@@ -160,10 +163,20 @@ public final class LlamaCall {
         guard on else { return }
         guard let negotiator else { throw LlamaCallError.notConnected }
         guard await media.microphoneAllowed() else { throw LlamaCallError.microphoneDenied }
+        guard state == .live else { throw LlamaCallError.notConnected }
         let track = media.makeMicrophone(tap: micTap.forward)
         microphone = track
         isMicrophoneOn = true
-        try await negotiator.publish(track, as: "mic")
+        do {
+            try await negotiator.publish(track, as: "mic")
+        } catch {
+            // Unpublished, so the next `setMicrophone(true)` publishes again rather than toggling a dead track.
+            if microphone === track {
+                microphone = nil
+                isMicrophoneOn = false
+            }
+            throw error
+        }
     }
 
     /// `publish: false` starts the camera for `selfTrack` only; nothing leaves the phone until a later `setCamera(true)`.
@@ -183,11 +196,17 @@ public final class LlamaCall {
             camera = existing
         } else {
             guard await media.cameraAllowed() else { throw LlamaCallError.cameraDenied }
+            guard state == .live else { throw LlamaCallError.notConnected }
             camera = media.makeCamera()
             self.camera = camera
         }
         if !isCameraOn {
             try await camera.start()
+            // The call may have ended while the capturer came up; teardown already ran, so stop it here.
+            guard state == .live else {
+                camera.stop()
+                throw LlamaCallError.notConnected
+            }
             camera.track.isEnabled = true
             isCameraOn = true
             selfTrack = camera.preview
@@ -195,7 +214,12 @@ public final class LlamaCall {
         }
         if publish && !cameraPublished {
             cameraPublished = true
-            try await negotiator.publish(camera.track, as: "camera")
+            do {
+                try await negotiator.publish(camera.track, as: "camera")
+            } catch {
+                cameraPublished = false
+                throw error
+            }
         }
     }
 
@@ -205,18 +229,23 @@ public final class LlamaCall {
     public func hangUp() async {
         guard socket != nil else { return }
         send(.hangup)
-        end("hung up")
+        end("hung up", failingConnect: .notConnected)
     }
 
     /// Leaves; the room ends the call a minute later unless someone rejoins.
     public func leave() async {
         guard socket != nil else { return }
-        end("left")
+        end("left", failingConnect: .notConnected)
     }
 
-    private func end(_ reason: String) {
+    /// `failingConnect`: what a `connect` still waiting for welcome throws.
+    private func end(_ reason: String, failingConnect error: LlamaCallError = .refused) {
         if case .ended = state { return }
         state = .ended(reason: reason)
+        if let pending = connecting {
+            connecting = nil
+            pending.resume(throwing: error)
+        }
         pinger?.cancel()
         pinger = nil
         negotiator?.cancel()

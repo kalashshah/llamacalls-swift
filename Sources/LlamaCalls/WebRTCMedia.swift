@@ -8,6 +8,13 @@ import UIKit
 @MainActor final class WebRTCMedia: Media {
     static let factory: LKRTCPeerConnectionFactory = {
         LKRTCInitializeSSL()
+        #if os(iOS)
+        // WebRTC re-applies its own session configuration when audio starts, and its default
+        // has no .defaultToSpeaker: the agent would come out of the earpiece, whatever the app set.
+        let audio = LKRTCAudioSessionConfiguration.webRTC()
+        audio.categoryOptions = [.defaultToSpeaker, .allowBluetooth]
+        LKRTCAudioSessionConfiguration.setWebRTC(audio)
+        #endif
         return LKRTCPeerConnectionFactory(encoderFactory: LKRTCDefaultVideoEncoderFactory(),
                                           decoderFactory: LKRTCDefaultVideoDecoderFactory())
     }()
@@ -64,9 +71,10 @@ final class WebRTCRemoteAudio: RemoteAudioTrack {
     let track: LKRTCAudioTrack
     private var renderers: [PCMRenderer] = []
     init(_ track: LKRTCAudioTrack) { self.track = track }
+    // The source's gain runs 0...10 with 1.0 as unity, so the 0...1 volume maps across unchanged.
     var volume: Double {
-        get { track.source.volume / 10 }
-        set { track.source.volume = newValue * 10 }  // the source's gain runs 0...10
+        get { track.source.volume }
+        set { track.source.volume = newValue }
     }
     func tap(_ handler: @escaping @Sendable (AVAudioPCMBuffer) -> Void) {
         let renderer = PCMRenderer(handler)

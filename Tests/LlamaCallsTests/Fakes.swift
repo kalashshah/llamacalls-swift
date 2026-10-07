@@ -65,7 +65,14 @@ final class FakeRemoteAudio: RemoteAudioTrack {
     let track: LocalMediaTrack = FakeTrack()
     let preview = VideoTrack(NSObject())
     var running = false
-    func start() async throws { running = true }
+    var slow = false
+    private var pending: CheckedContinuation<Void, Never>?
+    func start() async throws {
+        // A slow start finishes only when the test says so, after the call may have ended.
+        if slow { await withCheckedContinuation { pending = $0 } }
+        running = true
+    }
+    func finishStart() { pending?.resume(); pending = nil }
     func stop() { running = false }
 }
 
@@ -76,6 +83,7 @@ final class FakeRemoteAudio: RemoteAudioTrack {
     var camAllowed = true
     var madeMicrophone: FakeTrack?
     var madeCamera: FakeCamera?
+    var slowCamera = false
     var events: PeerConnectionEvents?
 
     func openSocket(_ url: URL) -> Socket {
@@ -94,6 +102,7 @@ final class FakeRemoteAudio: RemoteAudioTrack {
     }
     func makeCamera() -> Camera {
         let c = FakeCamera()
+        c.slow = slowCamera
         madeCamera = c
         return c
     }
